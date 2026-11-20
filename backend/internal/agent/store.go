@@ -8,18 +8,20 @@ import (
 )
 
 var (
-	ErrNotFound    = errors.New("order not found")
-	ErrConflict    = errors.New("order cannot be cancelled")
-	ErrKeyConflict = errors.New("idempotency key already used for a different operation")
+	ErrNotFound        = errors.New("order not found")
+	ErrConflict        = errors.New("order cannot be cancelled")
+	ErrKeyConflict     = errors.New("idempotency key already used for a different operation")
+	ErrVersionMismatch = errors.New("order changed since it was previewed; preview it again")
 )
 
 type Order struct {
-	ID       string  `json:"id"`
-	Tenant   string  `json:"tenant"`
-	Product  string  `json:"product"`
-	Status   string  `json:"status"`
-	TotalUSD float64 `json:"total_usd"`
-	Version  int     `json:"version"`
+	ID      string `json:"id"`
+	Tenant  string `json:"tenant"`
+	Product string `json:"product"`
+	Status  string `json:"status"`
+	// Money is kept in integer cents so it is never subject to float rounding.
+	TotalCents int64 `json:"total_cents"`
+	Version    int   `json:"version"`
 }
 
 type Preview struct {
@@ -51,9 +53,9 @@ type Store struct {
 func NewSeedStore() *Store {
 	return &Store{
 		orders: map[string]Order{
-			"ORD-1001": {ID: "ORD-1001", Tenant: "acme", Product: "Wireless Headphones", Status: "delivered", TotalUSD: 129.00, Version: 1},
-			"ORD-1002": {ID: "ORD-1002", Tenant: "acme", Product: "Bluetooth Speaker", Status: "processing", TotalUSD: 79.00, Version: 1},
-			"ORD-2001": {ID: "ORD-2001", Tenant: "globex", Product: "Smart Keyboard", Status: "processing", TotalUSD: 149.00, Version: 1},
+			"ORD-1001": {ID: "ORD-1001", Tenant: "acme", Product: "Wireless Headphones", Status: "delivered", TotalCents: 12900, Version: 1},
+			"ORD-1002": {ID: "ORD-1002", Tenant: "acme", Product: "Bluetooth Speaker", Status: "processing", TotalCents: 7900, Version: 1},
+			"ORD-2001": {ID: "ORD-2001", Tenant: "globex", Product: "Smart Keyboard", Status: "processing", TotalCents: 14900, Version: 1},
 		},
 		operations: map[string]operation{},
 	}
@@ -102,7 +104,11 @@ func (s *Store) PreviewCancel(tenant, id string) (Preview, error) {
 
 // ExecuteCancel is atomic within one Go process. A production multi-instance
 // service needs a durable transactional store for both the mutation and receipt.
-func (s *Store) ExecuteCancel(tenant, id, idempotencyKey string) (Receipt, error) {
+//
+// expectedVersion is the order version the caller was shown in the preview. The
+// cancellation is refused if the order has changed since then, so a
+// confirmation only ever applies to the state that was actually reviewed.
+func (s *Store) ExecuteCancel(tenant, id string, expectedVersion int, idempotencyKey string) (Receipt, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	key := tenant + ":" + idempotencyKey
@@ -117,6 +123,9 @@ func (s *Store) ExecuteCancel(tenant, id, idempotencyKey string) (Receipt, error
 	o, err := s.getLocked(tenant, id)
 	if err != nil {
 		return Receipt{}, err
+	}
+	if o.Version != expectedVersion {
+		return Receipt{}, ErrVersionMismatch
 	}
 	if o.Status != "processing" {
 		return Receipt{}, ErrConflict
