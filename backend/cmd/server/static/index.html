@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Enterprise Action Agent — Zero-dependency Demo</title>
+<style>
+:root{font-family:system-ui,Arial,sans-serif;background:#0d1523;color:#e7eefb}*{box-sizing:border-box}main{max-width:850px;margin:35px auto;padding:20px}h1{margin-bottom:6px}.dim{color:#a5b3cb}.panels{display:grid;grid-template-columns:1fr 1fr;gap:16px}.panel{border:1px solid #34445d;border-radius:14px;background:#19253a;padding:22px}label{display:block;margin:13px 0}input,select{display:block;width:100%;padding:10px;margin-top:7px;color:#fff;background:#0c1525;border:1px solid #576882;border-radius:7px}input[type=checkbox]{display:inline;width:auto;margin-right:7px}button{border:0;border-radius:8px;padding:11px 13px;margin:6px 7px 6px 0;cursor:pointer;background:#77d9e7;color:#0d1d27;font-weight:700}button:disabled{opacity:.45;cursor:not-allowed}.muted{background:#334763;color:#fff}.alert{border-radius:8px;padding:12px;background:#28394d;margin-top:15px}.error{background:#572c37;color:#ffd7d7}.ok{background:#173f3a}.small{font-size:13px}.meta{color:#86dce6;font-size:12px;letter-spacing:1px;font-weight:700}@media(max-width:650px){.panels{grid-template-columns:1fr}}
+</style></head>
+<body><main>
+<div class="meta">SIERRA-INSPIRED ENGINEERING LAB · MILESTONE 1</div><h1>Enterprise Action Agent</h1><p class="dim">A functioning Go-only demo of safe actions. The React + TypeScript frontend is also included in this starter.</p>
+<div class="panels">
+<section class="panel"><h2>1. Select order</h2><label>Demo tenant<select id="tenant"><option value="acme">Acme</option><option value="globex">Globex</option></select></label><label>Order ID<input id="order" value="ORD-1002"></label><button id="lookup">Look up order</button><button class="muted" id="preview">Preview cancellation</button><p class="dim small">ORD-1002: cancellable · ORD-1001: delivered · ORD-2001: other tenant</p></section>
+<section class="panel"><h2>2. Review and authorize</h2><div id="result" class="dim">Select an order to begin.</div><div id="gate" hidden><label><input type="checkbox" id="confirmed">I explicitly approve cancellation.</label><button id="execute" disabled>Confirm cancellation</button></div><div id="receipt"></div></section></div>
+<p class="dim small">Security scope: the demo tenant selection is not authentication. The backend uses in-memory state; do not expose this example publicly or use real customer data. Future milestones add real identity, PostgreSQL, LLM reasoning, and MCP tools.</p>
+</main><script>
+const $ = id => document.getElementById(id);
+let key = '';
+let canExecute = false;
+let submitted = false;
+const escapeHTML = s => String(s).replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;');
+const request = async (path, body) => {
+  const options = {headers: {'X-Demo-Tenant':$('tenant').value, 'Content-Type':'application/json'}};
+  if(body) {options.method='POST'; options.body=JSON.stringify(body)}
+  const response = await fetch(path,options); const result = await response.json();
+  if(!response.ok) throw new Error(result.error || 'Request failed'); return result;
+};
+const reset=()=>{$('result').textContent='Ready to look up the order.';$('receipt').textContent='';$('gate').hidden=true;$('confirmed').checked=false;$('execute').disabled=true;canExecute=false;submitted=false;key=''};
+function orderHTML(o){return `<strong>${escapeHTML(o.id)}</strong><p>${escapeHTML(o.product)} — $${o.total_usd.toFixed(2)}</p><p>Status: ${escapeHTML(o.status)} | Version: ${o.version}</p>`}
+async function run(operation){try{await operation()}catch(e){$('receipt').innerHTML=`<div class="alert error">${escapeHTML(e.message)}</div>`}}
+$('lookup').onclick=()=>{reset();run(async()=>{$('result').innerHTML=orderHTML(await request('/api/orders/'+encodeURIComponent($('order').value)))})};
+$('preview').onclick=()=>{reset();run(async()=>{const p=await request('/api/actions/preview',{order_id:$('order').value,action:'cancel'});$('result').innerHTML=orderHTML(p.order)+`<div class="alert ${p.can_execute?'ok':'error'}">${escapeHTML(p.reason)}</div>`;canExecute=p.can_execute;key=crypto.randomUUID();$('gate').hidden=!canExecute})};
+$('confirmed').onchange=()=>{$('execute').disabled=!$('confirmed').checked};
+$('execute').onclick=()=>run(async()=>{const r=await request('/api/actions/execute',{order_id:$('order').value,action:'cancel',confirmed:$('confirmed').checked,idempotency_key:key});$('result').innerHTML=orderHTML(r.order);$('receipt').innerHTML=`<div class="alert ok">${r.duplicate?'Repeated request: no second mutation.':escapeHTML(r.message)}<br><button id="replay" class="muted">Replay with same idempotency key</button></div>`;$('replay').onclick=$('execute').onclick;submitted=true});
+$('tenant').onchange=()=>{$('order').value=$('tenant').value==='acme'?'ORD-1002':'ORD-2001';reset()};
+$('order').oninput=reset;
+</script></body></html>
